@@ -1,106 +1,108 @@
 import React, { useState, useEffect } from 'react';
-import { Calculator, Settings, Plus, Trash2, Truck, Package, ChevronRight, AlertCircle, FileSpreadsheet, X, Check, AlertTriangle, FileText, BarChart3, PieChart, ChevronDown, ChevronUp, Loader2, Eraser, Users, Cloud, RefreshCw } from 'lucide-react';
-// Firebase fonksiyonlarını kütüphaneden çekiyoruz
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
-// Kendi oluşturduğumuz firebase.js dosyasından auth ve db'yi alıyoruz
-import { auth, db } from './firebase'; 
+import { Calculator, Settings, Plus, Trash2, Truck, Package, ChevronRight, AlertCircle, FileSpreadsheet, X, Check, AlertTriangle, FileText, BarChart3, PieChart, ChevronDown, ChevronUp, Loader2, Eraser, Users, LogOut, LogIn, Cloud } from 'lucide-react';
 
-// Varsayılan Başlangıç Verisi
-const INITIAL_TEMPLATE_DATA = {
-  name: "1000727",
-  description: "Merkez Depo (Örnek)",
-  plusFactor: 9.338,
-  tiers: [
-    { id: 101, limit: 5, price: 151.75 },
-    { id: 102, limit: 10, price: 157.54 },
-    { id: 103, limit: 20, price: 198.37 },
-    { id: 104, limit: 30, price: 291.82 },
-  ]
-};
+// --- SUPABASE AYARLARI ---
+const supabaseUrl = 'https://dlyjjmjbzifbvgsiuldo.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRseWpqbWpiemlmYnZnc2l1bGRvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ2OTQ0MTksImV4cCI6MjA4MDI3MDQxOX0.OhCpzQtMPf6i1azak1FxxncRYYjIdh-wroT1kuAxJ3c';
 
-// Uygulama ID'si (Veritabanında verilerin karışmaması için)
-const appId = 'kargo-hesaplama-v1';
-
-export default function KargoApp() {
-  const [activeTab, setActiveTab] = useState('simulation');
-  const [sellers, setSellers] = useState([]);
-  const [user, setUser] = useState(null);
+// --- SUPABASE YÜKLEYİCİ ---
+function useSupabaseLoader() {
+  const [supabase, setSupabase] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [dbStatus, setDbStatus] = useState('connecting');
 
-  // 1. Yetkilendirme (Auth)
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        await signInAnonymously(auth);
-      } catch (error) {
-        console.error("Auth Error:", error);
-        setDbStatus('error');
+    if (window.supabase) {
+      const client = window.supabase.createClient(supabaseUrl, supabaseKey);
+      setSupabase(client);
+      setLoading(false);
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
+    script.async = true;
+    script.onload = () => {
+      if (window.supabase) {
+        const client = window.supabase.createClient(supabaseUrl, supabaseKey);
+        setSupabase(client);
+        setLoading(false);
       }
     };
-    initAuth();
-
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-    });
-    return () => unsubscribe();
+    script.onerror = () => {
+      console.error("Supabase kütüphanesi yüklenemedi.");
+      setLoading(false);
+    };
+    document.body.appendChild(script);
   }, []);
 
-  // 2. Veri Senkronizasyonu (Firestore Listener)
+  return { supabase, libLoading: loading };
+}
+
+// Cihaz Kimliği (Auth yerine)
+const getDeviceId = () => {
+  let deviceId = localStorage.getItem('kargo_app_device_id');
+  if (!deviceId) {
+    deviceId = crypto.randomUUID();
+    localStorage.setItem('kargo_app_device_id', deviceId);
+  }
+  return deviceId;
+};
+
+export default function KargoApp() {
+  const { supabase, libLoading } = useSupabaseLoader();
+  const deviceId = getDeviceId(); 
+
+  if (libLoading) {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center bg-gray-50 text-blue-900">
+        <Loader2 className="animate-spin w-12 h-12 mb-4"/>
+        <p className="font-semibold">Sistem Başlatılıyor...</p>
+      </div>
+    );
+  }
+
+  return <MainApp supabase={supabase} deviceId={deviceId} />;
+}
+
+// --- ANA UYGULAMA ---
+function MainApp({ supabase, deviceId }) {
+  const [activeTab, setActiveTab] = useState('simulation');
+  const [sellers, setSellers] = useState([]);
+  const [loadingSellers, setLoadingSellers] = useState(true);
+
+  // Verileri Çek
+  const fetchSellers = async () => {
+    setLoadingSellers(true);
+    const { data, error } = await supabase
+      .from('sellers')
+      .select('*')
+      .order('created_at', { ascending: true });
+    
+    if (error) {
+        console.error('Error fetching sellers:', error);
+        setSellers([]); 
+    } else {
+        setSellers(data || []);
+    }
+    setLoadingSellers(false);
+  };
+
   useEffect(() => {
-    if (!user) return;
+    if(supabase) fetchSellers();
+  }, [supabase]);
 
-    const collectionRef = collection(db, 'users', user.uid, 'sellers');
-    
-    setDbStatus('connecting');
-    
-    const unsubscribe = onSnapshot(collectionRef, (snapshot) => {
-      const fetchedSellers = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-
-      // Eğer hiç veri yoksa, başlangıç verisini ekle
-      if (fetchedSellers.length === 0 && !snapshot.metadata.hasPendingWrites) {
-         addDoc(collectionRef, INITIAL_TEMPLATE_DATA).catch(console.error);
-      } else {
-         setSellers(fetchedSellers);
-      }
-      
-      setLoading(false);
-      setDbStatus('connected');
-    }, (error) => {
-      console.error("Firestore Error:", error);
-      setDbStatus('error');
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [user]);
-
-  // --- HESAPLAMA MOTORU ---
+  // HESAPLAMA MOTORU
   const calculatePrice = (seller, inputDesi) => {
     if (!seller || !inputDesi || inputDesi <= 0) return null;
-
     const currentTiers = seller.tiers || [];
     const sortedTiers = [...currentTiers].sort((a, b) => (parseFloat(a.limit) || 0) - (parseFloat(b.limit) || 0));
-    
     if (sortedTiers.length === 0) return null;
 
     const maxTier = sortedTiers[sortedTiers.length - 1];
-
-    let result = {
-      basePrice: 0,
-      extraDesi: 0,
-      extraCost: 0,
-      total: 0,
-      method: ''
-    };
-
+    let result = { basePrice: 0, extraDesi: 0, extraCost: 0, total: 0, method: '' };
     const maxLimit = parseFloat(maxTier.limit) || 0;
     const maxPrice = parseFloat(maxTier.price) || 0;
-    const factor = parseFloat(seller.plusFactor) || 0;
+    const factor = parseFloat(seller.plus_factor) || 0; 
 
     if (inputDesi > maxLimit) {
       result.basePrice = maxPrice;
@@ -120,66 +122,104 @@ export default function KargoApp() {
     return result;
   };
 
+  // DB İşlemleri
   const dbActions = {
     addSeller: async (newSellerData) => {
-      if (!user) return;
-      const docRef = await addDoc(collection(db, 'users', user.uid, 'sellers'), newSellerData);
-      return docRef.id;
+      const payload = {
+        user_id: deviceId, // Bu cihazın ID'sini kaydediyoruz
+        name: newSellerData.name,
+        description: newSellerData.description,
+        plus_factor: newSellerData.plusFactor,
+        tiers: newSellerData.tiers
+      };
+      
+      const { data, error } = await supabase.from('sellers').insert([payload]).select();
+      
+      if (error) {
+          console.error("Ekleme Hatası:", error);
+          alert(`Kayıt eklenemedi: ${error.message}`);
+      } else if (data) {
+        // Listeyi güncelle (önceki state'i koruyarak)
+        setSellers(prev => [...prev, data[0]]);
+        return data[0].id;
+      }
     },
     updateSeller: async (id, data) => {
-        if (!user) return;
-        const docRef = doc(db, 'users', user.uid, 'sellers', id);
-        await updateDoc(docRef, data);
+      const payload = { ...data };
+      if (payload.plusFactor !== undefined) {
+        payload.plus_factor = payload.plusFactor;
+        delete payload.plusFactor;
+      }
+      
+      const { error } = await supabase
+        .from('sellers')
+        .update(payload)
+        .eq('id', id);
+
+      if (!error) {
+        setSellers(prev => prev.map(s => s.id === id ? { ...s, ...data, ...(payload.plus_factor !== undefined && { plus_factor: payload.plus_factor }) } : s));
+      } else {
+          console.error("Güncelleme Hatası:", error);
+          alert("Güncelleme sırasında hata oluştu.");
+      }
     },
     deleteSeller: async (id) => {
-        if (!user) return;
-        await deleteDoc(doc(db, 'users', user.uid, 'sellers', id));
+      const { error } = await supabase
+        .from('sellers')
+        .delete()
+        .eq('id', id);
+
+      if (!error) {
+        setSellers(prev => prev.filter(s => s.id !== id));
+      } else {
+          console.error("Silme Hatası:", error);
+          alert("Silme işlemi başarısız. Yetkiniz olmayabilir.");
+      }
     }
   };
 
-  if (loading) {
-      return (
-          <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 text-blue-900">
-              <Loader2 className="w-12 h-12 animate-spin mb-4" />
-              <p className="font-semibold">Veriler Yükleniyor...</p>
-          </div>
-      )
-  }
-
   return (
     <div className="min-h-screen bg-gray-50 font-sans text-gray-800">
-      {/* HEADER */}
       <header className="bg-blue-900 text-white p-4 shadow-lg sticky top-0 z-50">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-2">
             <Truck className="w-8 h-8 text-blue-300" />
             <div>
-                <h1 className="text-xl font-bold tracking-wide">Lojistik Maliyet Hesaplayıcı</h1>
-                <div className="flex items-center gap-1 text-xs text-blue-300">
-                    {dbStatus === 'connected' ? <Cloud size={12} className="text-green-400"/> : <RefreshCw size={12} className="animate-spin"/>}
-                    {dbStatus === 'connected' ? 'Veritabanı Bağlı' : 'Bağlanıyor...'}
-                </div>
+              <h1 className="text-xl font-bold tracking-wide">Lojistik Maliyet Hesaplayıcı</h1>
+              <div className="flex items-center gap-1 text-xs text-blue-300">
+                <Cloud size={12} className="text-green-400"/> DB Bağlı
+              </div>
             </div>
           </div>
-          <div className="flex bg-blue-800 rounded-lg p-1 overflow-x-auto w-full md:w-auto">
-            <button onClick={() => setActiveTab('simulation')} className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-3 py-2 rounded-md transition-all whitespace-nowrap ${activeTab === 'simulation' ? 'bg-white text-blue-900 shadow' : 'text-blue-200 hover:text-white'}`}>
-              <Calculator size={18} /> <span className="hidden sm:inline">Simülasyon</span>
-            </button>
-            <button onClick={() => setActiveTab('batch')} className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-3 py-2 rounded-md transition-all whitespace-nowrap ${activeTab === 'batch' ? 'bg-white text-blue-900 shadow' : 'text-blue-200 hover:text-white'}`}>
-              <FileText size={18} /> <span className="hidden sm:inline">Toplu İşlem</span>
-            </button>
-            <button onClick={() => setActiveTab('admin')} className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-3 py-2 rounded-md transition-all whitespace-nowrap ${activeTab === 'admin' ? 'bg-white text-blue-900 shadow' : 'text-blue-200 hover:text-white'}`}>
-              <Settings size={18} /> <span className="hidden sm:inline">Yönetim</span>
-            </button>
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            <div className="flex bg-blue-800 rounded-lg p-1 overflow-x-auto flex-1 md:flex-none">
+              <button onClick={() => setActiveTab('simulation')} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md transition-all ${activeTab === 'simulation' ? 'bg-white text-blue-900 shadow' : 'text-blue-200 hover:text-white'}`}>
+                <Calculator size={18} /> <span className="hidden sm:inline">Simülasyon</span>
+              </button>
+              <button onClick={() => setActiveTab('batch')} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md transition-all ${activeTab === 'batch' ? 'bg-white text-blue-900 shadow' : 'text-blue-200 hover:text-white'}`}>
+                <FileText size={18} /> <span className="hidden sm:inline">Toplu İşlem</span>
+              </button>
+              <button onClick={() => setActiveTab('admin')} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md transition-all ${activeTab === 'admin' ? 'bg-white text-blue-900 shadow' : 'text-blue-200 hover:text-white'}`}>
+                <Settings size={18} /> <span className="hidden sm:inline">Yönetim</span>
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
-      {/* MAIN CONTENT */}
       <main className="max-w-6xl mx-auto p-4 md:p-6">
-        {activeTab === 'simulation' && <SimulationView sellers={sellers} calculatePrice={calculatePrice} />}
-        {activeTab === 'batch' && <BatchCalculationView sellers={sellers} calculatePrice={calculatePrice} />}
-        {activeTab === 'admin' && <AdminView sellers={sellers} dbActions={dbActions} />}
+        {loadingSellers ? (
+            <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+                <Loader2 className="w-10 h-10 animate-spin mb-2" />
+                <p>Veriler yükleniyor...</p>
+            </div>
+        ) : (
+            <>
+                {activeTab === 'simulation' && <SimulationView sellers={sellers} calculatePrice={calculatePrice} />}
+                {activeTab === 'batch' && <BatchCalculationView sellers={sellers} calculatePrice={calculatePrice} />}
+                {activeTab === 'admin' && <AdminView sellers={sellers} dbActions={dbActions} />}
+            </>
+        )}
       </main>
     </div>
   );
@@ -219,8 +259,8 @@ function SimulationView({ sellers, calculatePrice }) {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-600 mb-1">Satıcı Seçimi</label>
-            <select value={selectedSellerId} onChange={(e) => { setSelectedSellerId(e.target.value); setResult(null); }} className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-gray-50">
-              {sellers.length === 0 && <option>Tanımlı satıcı yok...</option>}
+            <select value={selectedSellerId} onChange={(e) => { setSelectedSellerId(e.target.value === "" ? "" : parseInt(e.target.value)); setResult(null); }} className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-blue-500 outline-none bg-gray-50">
+              {sellers.length === 0 && <option value="">Tanımlı satıcı yok...</option>}
               {sellers.map(s => (
                 <option key={s.id} value={s.id}>{s.name} {s.description ? ` - ${s.description}` : ''}</option>
               ))}
@@ -345,7 +385,7 @@ function BatchCalculationView({ sellers, calculatePrice }) {
                                             <div className="flex justify-between mb-1">
                                                 <div className="flex flex-col gap-1 w-full overflow-hidden">
                                                     <span className="font-medium text-gray-700 truncate">{stat.displayName}</span>
-                                                    <div className="flex gap-1"><span className="text-[10px] bg-gray-100 px-1 rounded">{stat.count} Adet</span><span className="text-[10px] bg-blue-50 text-blue-700 px-1 rounded">Ort: {avgCost.toFixed(2)} TL</span></div>
+                                                    <div className="flex gap-1"><span className="text-[10px] bg-gray-100 px-1 rounded">{stat.count.toLocaleString('tr-TR')} Adet</span><span className="text-[10px] bg-blue-50 text-blue-700 px-1 rounded">Ort: {avgCost.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL</span></div>
                                                 </div>
                                                 <span className="font-bold text-gray-900">{stat.total.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} TL</span>
                                             </div>
@@ -373,10 +413,27 @@ function BatchCalculationView({ sellers, calculatePrice }) {
 function AdminView({ sellers, dbActions }) {
   const [editingId, setEditingId] = useState(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [deleteConfirmationId, setDeleteConfirmationId] = useState(null);
 
   const addNewSeller = async () => {
-    const newId = await dbActions.addSeller({ name: "Yeni Satıcı", description: "", plusFactor: 0, tiers: [{ id: Date.now(), limit: 10, price: 100 }] });
-    setEditingId(newId);
+    let baseName = "Yeni Satıcı";
+    let newName = baseName;
+    let counter = 1;
+    
+    while (sellers.some(s => s.name === newName)) {
+        newName = `${baseName} (${counter})`;
+        counter++;
+    }
+
+    const newSellerData = {
+      name: newName,
+      description: "", 
+      plusFactor: 0,
+      tiers: [{ id: Date.now(), limit: 10, price: 100 }]
+    };
+
+    const newId = await dbActions.addSeller(newSellerData);
+    if(newId) setEditingId(newId);
   };
 
   const handleImport = async (parsedData) => {
@@ -392,9 +449,16 @@ function AdminView({ sellers, dbActions }) {
     setIsImportModalOpen(false);
   };
 
+  // Silme işlemini tetikleyen fonksiyon
+  const handleDelete = async (id) => {
+      await dbActions.deleteSeller(id);
+      if (editingId === id) setEditingId(null);
+      setDeleteConfirmationId(null);
+  };
+
   return (
     <div className="space-y-4 max-w-4xl mx-auto">
-      {isImportModalOpen && <ExcelImportModal onClose={() => setIsImportModalOpen(false)} onImport={handleImport} sellers={sellers} />}
+      {isImportModalOpen && <ExcelImportModal onClose={() => setIsImportModalOpen(false)} onImport={handleImport} />}
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-bold text-gray-800">Tanımlı Satıcılar</h2>
         <div className="flex gap-2">
@@ -412,7 +476,17 @@ function AdminView({ sellers, dbActions }) {
             {editingId === seller.id && (
                <div className="px-4 pb-4 border-t border-gray-100">
                  <SellerEditor seller={seller} updateSeller={(id, field, val) => dbActions.updateSeller(id, {[field]: val})} />
-                 <div className="mt-4 flex justify-end"><button onClick={(e) => { e.stopPropagation(); if(confirm('Silinsin mi?')) dbActions.deleteSeller(seller.id); }} className="text-red-500 flex gap-1 border border-red-200 px-3 py-1 rounded hover:bg-red-50"><Trash2 size={14}/> Sil</button></div>
+                 <div className="mt-4 flex justify-end">
+                    {deleteConfirmationId === seller.id ? (
+                        <div className="flex items-center gap-2 animate-fade-in">
+                            <span className="text-sm text-gray-600 font-medium">Bu satıcı silinsin mi?</span>
+                            <button onClick={(e) => { e.stopPropagation(); handleDelete(seller.id); }} className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm font-bold">Evet, Sil</button>
+                            <button onClick={(e) => { e.stopPropagation(); setDeleteConfirmationId(null); }} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 rounded text-sm">İptal</button>
+                        </div>
+                    ) : (
+                        <button onClick={(e) => { e.stopPropagation(); setDeleteConfirmationId(seller.id); }} className="text-red-500 flex gap-1 border border-red-200 px-3 py-1 rounded hover:bg-red-50"><Trash2 size={14}/> Sil</button>
+                    )}
+                 </div>
                </div>
             )}
           </div>
@@ -423,34 +497,104 @@ function AdminView({ sellers, dbActions }) {
 }
 
 function SellerEditor({ seller, updateSeller }) {
-  // Basitleştirilmiş Editor mantığı (detaylar yukarıdaki örnekteki gibi olmalı)
+  const plusFactor = seller.plus_factor !== undefined ? seller.plus_factor : (seller.plusFactor || 0);
+
+  const updateField = (field, value) => {
+      updateSeller(seller.id, field, value);
+  };
+
+  const updateTier = (tierId, field, value) => {
+      const newValue = value === '' ? '' : parseFloat(value);
+      const newTiers = seller.tiers.map(t => t.id === tierId ? { ...t, [field]: newValue } : t);
+      updateSeller(seller.id, 'tiers', newTiers);
+  };
+  const addTier = () => {
+      const newTiers = [...(seller.tiers || []), { id: Date.now(), limit: 0, price: 0 }];
+      updateSeller(seller.id, 'tiers', newTiers);
+  };
+  const removeTier = (tierId) => {
+      const newTiers = seller.tiers.filter(t => t.id !== tierId);
+      updateSeller(seller.id, 'tiers', newTiers);
+  };
+
   return (
     <div className="mt-4">
-        <div className="grid grid-cols-2 gap-4">
-            <input type="text" value={seller.name} onChange={e => updateSeller(seller.id, 'name', e.target.value)} className="border p-2 rounded" placeholder="Satıcı Kodu"/>
-            <input type="number" value={seller.plusFactor} onChange={e => updateSeller(seller.id, 'plusFactor', parseFloat(e.target.value))} className="border p-2 rounded" placeholder="Plus Çarpanı"/>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div><label className="text-xs font-bold text-gray-500">KOD</label><input type="text" value={seller.name} onChange={e => updateField('name', e.target.value)} className="w-full border p-2 rounded mt-1"/></div>
+            <div><label className="text-xs font-bold text-gray-500">TANIM</label><input type="text" value={seller.description || ''} onChange={e => updateField('description', e.target.value)} className="w-full border p-2 rounded mt-1"/></div>
+            <div>
+              <label className="text-xs font-bold text-gray-500">PLUS ÇARPAN</label>
+              <input 
+                type="number" 
+                value={plusFactor === '' || isNaN(plusFactor) ? '' : plusFactor} 
+                onChange={e => updateField('plusFactor', e.target.value === '' ? '' : parseFloat(e.target.value))} 
+                className="w-full border p-2 rounded mt-1"
+              />
+            </div>
         </div>
-        {/* Barem tablosu ve diğer detaylar buraya gelecek... */}
+        <div className="mb-2 flex justify-between"><label className="text-xs font-bold text-gray-500">BAREMLER</label><button onClick={addTier} className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded flex items-center gap-1"><Plus size={12}/> Ekle</button></div>
+        <div className="border rounded overflow-hidden">
+            <table className="w-full text-sm text-left"><thead className="bg-gray-50"><tr><th className="p-2">Desi</th><th className="p-2">Fiyat</th><th className="p-2"></th></tr></thead>
+            <tbody className="divide-y">{seller.tiers?.map(t => (
+                <tr key={t.id}>
+                    <td className="p-2">
+                      <input 
+                        type="number" 
+                        value={isNaN(t.limit) ? '' : t.limit} 
+                        onChange={e => updateTier(t.id, 'limit', e.target.value)} 
+                        className="border rounded w-full p-1"
+                      />
+                    </td>
+                    <td className="p-2">
+                      <input 
+                        type="number" 
+                        value={isNaN(t.price) ? '' : t.price} 
+                        onChange={e => updateTier(t.id, 'price', e.target.value)} 
+                        className="border rounded w-full p-1"
+                      />
+                    </td>
+                    <td className="p-2 w-8"><button onClick={() => removeTier(t.id)} className="text-red-400 hover:text-red-600"><Trash2 size={14}/></button></td>
+                </tr>
+            ))}</tbody></table>
+        </div>
     </div>
   );
 }
 
 function ExcelImportModal({ onClose, onImport }) {
     const [rawText, setRawText] = useState('');
-    // ... Excel ayrıştırma mantığı ...
+    
+    const handleParse = () => {
+        const lines = rawText.trim().split(/\r?\n/);
+        const parsedData = {};
+        lines.forEach(line => {
+            const cols = line.split('\t');
+            if (cols.length < 3) return;
+            const name = cols[0].trim();
+            const desiRaw = cols[1].trim().toLowerCase();
+            const priceRaw = cols[2].trim().replace(',', '.');
+            if (!name || isNaN(parseFloat(priceRaw))) return;
+
+            if (!parsedData[name]) parsedData[name] = { tiers: [], plusFactor: 0 };
+            
+            if (desiRaw.includes('plus')) {
+                parsedData[name].plusFactor = parseFloat(priceRaw);
+            } else {
+                const limit = parseFloat(desiRaw.replace(',', '.'));
+                if (!isNaN(limit)) parsedData[name].tiers.push({ limit, price: parseFloat(priceRaw) });
+            }
+        });
+        onImport(parsedData);
+    };
+
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-xl w-full max-w-2xl">
-                <textarea className="w-full h-40 border p-2" value={rawText} onChange={e => setRawText(e.target.value)} placeholder="Verileri yapıştırın..."></textarea>
+            <div className="bg-white p-6 rounded-xl w-full max-w-2xl shadow-xl">
+                <h3 className="font-bold text-lg mb-4">Excel Verisi Yapıştır</h3>
+                <textarea className="w-full h-64 border p-3 rounded font-mono text-xs" value={rawText} onChange={e => setRawText(e.target.value)} placeholder="Satıcı Adı | Desi | Fiyat formatında yapıştırın..."></textarea>
                 <div className="flex justify-end gap-2 mt-4">
-                    <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded">İptal</button>
-                    {/* Basit ayrıştırma örneği */}
-                    <button onClick={() => {
-                        // Basit parser
-                        const data = {}; 
-                        // ... parser kodu ...
-                        onImport(data);
-                    }} className="px-4 py-2 bg-green-600 text-white rounded">Yükle</button>
+                    <button onClick={onClose} className="px-4 py-2 bg-gray-100 rounded hover:bg-gray-200">İptal</button>
+                    <button onClick={handleParse} className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">İçeri Aktar</button>
                 </div>
             </div>
         </div>
